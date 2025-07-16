@@ -137,6 +137,14 @@ def handle_set_event(ack, respond, command, client):
         respond("❌ Please provide an event ID.")
         return
     try:
+        # Get user's timezone
+        response = requests.get(
+            f"https://slack.com/api/users.info?user={command['user_id']}",
+            headers={"Authorization": f"Bearer {os.getenv('SLACK_BOT_TOKEN')}"}
+        ).json()
+        user_timezone_name = response.get("user", {}).get("tz", "UTC")
+        user_timezone = pytz.timezone(user_timezone_name)
+        
         with open(events_path, "r") as f:
             events = json.load(f)
 
@@ -151,6 +159,10 @@ def handle_set_event(ack, respond, command, client):
                 "timestamp": datetime.now().timestamp(),
                 "created_by": command["user_id"]
             }
+        # Convert event timestamp to user's timezone for display
+        event_datetime_utc = datetime.fromtimestamp(event["timestamp"], pytz.UTC)
+        event_datetime_user_tz = event_datetime_utc.astimezone(user_timezone)
+        
         client.views_open(
             trigger_id=command["trigger_id"],
             view={
@@ -191,11 +203,11 @@ def handle_set_event(ack, respond, command, client):
                         "block_id": "datepicker_block",
                         "text": {
                             "type": "mrkdwn",
-                            "text": "Date:"
+                            "text": f"Date (in {user_timezone_name}):"
                         },
                         "accessory": {
                             "type": "datepicker",
-                            "initial_date": datetime.fromtimestamp(event["timestamp"]).strftime("%Y-%m-%d"),
+                            "initial_date": event_datetime_user_tz.strftime("%Y-%m-%d"),
                             "placeholder": {
                                 "type": "plain_text",
                                 "text": "Select a date",
@@ -205,12 +217,19 @@ def handle_set_event(ack, respond, command, client):
                         }
                     },
                     {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"Time (in {user_timezone_name}):"
+                        }
+                    },
+                    {
                         "type": "actions",
                         "block_id": "timepicker_block",
                         "elements": [
                             {
                                 "type": "timepicker",
-                                "initial_time": datetime.fromtimestamp(event["timestamp"]).strftime("%H:%M"),
+                                "initial_time": event_datetime_user_tz.strftime("%H:%M"),
                                 "placeholder": {
                                     "type": "plain_text",
                                     "text": "Select time",
@@ -246,7 +265,10 @@ def handle_set_event(ack, respond, command, client):
                         }
                     }
                 ],
-                "private_metadata": json.dumps({"original_code": code}),
+                "private_metadata": json.dumps({
+                    "original_code": code,
+                    "user_timezone": user_timezone_name
+                }),
             }
         )
     except FileNotFoundError:
@@ -264,13 +286,18 @@ def handle_save_event(ack, body, view):
     description = view["state"]["values"]["description_block"]["description_input"]["value"]
     meta = json.loads(view.get("private_metadata", "{}"))
     original_code = meta.get("original_code", new_code)
+    user_timezone_name = meta.get("user_timezone", "UTC")
     errors = {}
 
     try:
         with open(events_path, "r") as f:
             events = json.load(f)
 
-        timestamp = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M").timestamp()
+        # Parse the date/time in user's timezone and convert to UTC timestamp
+        user_timezone = pytz.timezone(user_timezone_name)
+        naive_datetime = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
+        localized_datetime = user_timezone.localize(naive_datetime)
+        timestamp = localized_datetime.astimezone(pytz.UTC).timestamp()
 
         # check if new code already exists
         if new_code in events and original_code != new_code:
@@ -304,6 +331,39 @@ def handle_save_event(ack, body, view):
     except Exception as e:
         errors["description_block"] = f"❌ Unexpected error: `{str(e)}`"
         ack(response_action="errors", errors=errors)
+
+@app.action("reset_time")
+def handle_reset_time(ack, body, client):
+    ack()
+    
+    # Get user timezone from the modal's private metadata
+    view = body["view"]
+    meta = json.loads(view.get("private_metadata", "{}"))
+    user_timezone_name = meta.get("user_timezone", "UTC")
+    user_timezone = pytz.timezone(user_timezone_name)
+    
+    # Get current time in user's timezone
+    current_time_user_tz = datetime.now(user_timezone)
+    current_date = current_time_user_tz.strftime("%Y-%m-%d")
+    current_time = current_time_user_tz.strftime("%H:%M")
+    
+    # Update the modal with current date and time
+    updated_view = view.copy()
+    
+    # Update date picker
+    for block in updated_view["blocks"]:
+        if block.get("block_id") == "datepicker_block":
+            block["accessory"]["initial_date"] = current_date
+        elif block.get("block_id") == "timepicker_block":
+            for element in block["elements"]:
+                if element.get("action_id") == "timepicker":
+                    element["initial_time"] = current_time
+    
+    # Update the modal
+    client.views_update(
+        view_id=view["id"],
+        view=updated_view
+    )
 
 # Start your app
 if __name__ == "__main__":
