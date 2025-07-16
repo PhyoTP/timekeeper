@@ -1,6 +1,5 @@
 import os
 from slack_bolt import App
-from slack_bolt.adapter.socket_mode import SocketModeHandler
 from dotenv import load_dotenv
 from datetime import datetime
 import pytz
@@ -10,7 +9,7 @@ import json
 load_dotenv()
 
 # Initializes your app with your bot token and socket mode handler
-app = App(token=os.getenv("SLACK_BOT_TOKEN"))
+app = App(token=os.getenv("SLACK_BOT_TOKEN"), signing_secret=os.getenv("SLACK_SIGNING_SECRET"))
 
 # get time 
 @app.command("/get_time")
@@ -304,4 +303,4 @@ def handle_save_event(ack, body, view):
 
 # Start your app
 if __name__ == "__main__":
-    SocketModeHandler(app, os.getenv("SLACK_APP_TOKEN")).start()
+    app.start(port=int(os.getenv("PORT", 3000)))
