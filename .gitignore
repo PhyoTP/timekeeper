@@ -1,2 +1,8 @@
 .env
 .venv
+events.json
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo

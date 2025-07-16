@@ -10,7 +10,11 @@ load_dotenv()
 
 # Initializes your app with your bot token and socket mode handler
 app = App(token=os.getenv("SLACK_BOT_TOKEN"), signing_secret=os.getenv("SLACK_SIGNING_SECRET"))
+# Get the directory of the current file (__init__.py)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Construct full path to events.json inside the same folder
+events_path = os.path.join(BASE_DIR, "events.json")
 # get time 
 @app.command("/get_time")
 def handle_get_time(ack, respond, command):
@@ -105,7 +109,7 @@ def handle_get_event(ack, respond, command):
         return
 
     try:
-        with open("events.json", "r") as f:
+        with open(events_path, "r") as f:
             events = json.load(f)
 
         event = events.get(event_id)
@@ -133,7 +137,7 @@ def handle_set_event(ack, respond, command, client):
         respond("❌ Please provide an event ID.")
         return
     try:
-        with open("events.json", "r") as f:
+        with open(events_path, "r") as f:
             events = json.load(f)
 
         event = events.get(code)
@@ -263,7 +267,7 @@ def handle_save_event(ack, body, view):
     errors = {}
 
     try:
-        with open("events.json", "r") as f:
+        with open(events_path, "r") as f:
             events = json.load(f)
 
         timestamp = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M").timestamp()
@@ -283,7 +287,7 @@ def handle_save_event(ack, body, view):
             "created_by": body["user"]["id"]
         }
 
-        with open("events.json", "w") as f:
+        with open(events_path, "w") as f:
             json.dump(events, f, indent=4)
 
         # ✅ Everything is fine — close modal
