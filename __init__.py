@@ -15,6 +15,16 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Construct full path to events.json inside the same folder
 events_path = os.path.join(BASE_DIR, "events.json")
+def get_user_timezone(user_id):
+    """Fetches the user's timezone from Slack API."""
+    response = requests.get(
+        f"https://slack.com/api/users.info?user={user_id}",
+        headers={"Authorization": f"Bearer {os.getenv('SLACK_BOT_TOKEN')}"}
+    )
+    if response.status_code == 200:
+        user_info = response.json()
+        return user_info.get("user", {}).get("tz", "UTC")
+    return "UTC"
 # get time 
 @app.command("/get_time")
 def handle_get_time(ack, respond, command):
@@ -74,11 +84,7 @@ def handle_get_time(ack, respond, command):
         if len(timezone_args) > 3:
             user_tz_name = timezone_args[3]
         else:
-            response = requests.get(
-                f"https://slack.com/api/users.info?user={command['user_id']}",
-                headers={"Authorization": f"Bearer {os.getenv('SLACK_BOT_TOKEN')}"}
-            ).json()
-            user_tz_name = response.get("user", {}).get("tz", "UTC")
+            user_tz_name = get_user_timezone(command["user_id"])
 
         res_timezone = pytz.timezone(user_tz_name)
         # Convert to result timezone
@@ -123,11 +129,7 @@ def handle_get_event(ack, respond, command):
     if len(command_args) > 1:
         timezone_name = command_args[1]
     else:
-        response = requests.get(
-            f"https://slack.com/api/users.info?user={command['user_id']}",
-            headers={"Authorization": f"Bearer {os.getenv('SLACK_BOT_TOKEN')}"}
-        ).json()
-        timezone_name = response.get("user", {}).get("tz", "UTC")
+        timezone_name = get_user_timezone(command["user_id"])
     if not event_id:
         respond("❌ Please provide an event ID.")
         return
@@ -188,11 +190,7 @@ def handle_set_event(ack, respond, command, client):
         return
     try:
         # Get user's timezone
-        response = requests.get(
-            f"https://slack.com/api/users.info?user={command['user_id']}",
-            headers={"Authorization": f"Bearer {os.getenv('SLACK_BOT_TOKEN')}"}
-        ).json()
-        user_timezone_name = response.get("user", {}).get("tz", "UTC")
+        user_timezone_name = get_user_timezone(command["user_id"])
         user_timezone = pytz.timezone(user_timezone_name)
         
         with open(events_path, "r") as f:
@@ -440,6 +438,75 @@ def handle_reminder(ack, client, action, respond, body):
         respond(f"🔔 Reminder set for {reminder_time.strftime('%Y-%m-%d %H:%M:%S')} UTC.")
     except Exception as e:
         respond(f"❌ Error setting reminder: `{str(e)}`")
+
+@app.command("/list_events")
+def handle_list_events(ack, respond, command):
+    ack()
+    interval = command.get("text", "").strip()
+    user_timezone = pytz.timezone(get_user_timezone(command["user_id"]))
+    now = datetime.now(user_timezone)
+    def matches_interval(date):
+        match interval:
+            case "year":
+                return date.year == now.year
+            case "month":
+                return date.year == now.year and date.month == now.month
+            case "day":
+                return date.year == now.year and date.month == now.month and date.day == now.day
+            case "hour":
+                return date.year == now.year and date.month == now.month and date.day == now.day and date.hour == now.hour
+            case _:
+                return True  # Default to all events if no interval is specified
+        
+    try:
+        with open(events_path, "r") as f:
+            events = json.load(f)
+
+        if not events:
+            respond("❌ No events found.")
+            return
+
+        blocks = []
+        for event_id, event in events.items():
+            timestamp = datetime.fromtimestamp(event["timestamp"], user_timezone)
+            if matches_interval(timestamp):
+                blocks.append({
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Event ID:* `{event_id}`\n"
+                                f"*Description:* {event['description']}\n"
+                                f"*Time:* {timestamp.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+                                f"*Created by:* <@{event['created_by']}>"
+                    }
+                })
+                blocks.append({
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "button",
+                            "text": {
+                                "type": "plain_text",
+                                "text": "Remind me",
+                                "emoji": True
+                            },
+                            "value": json.dumps({
+                                "timestamp": event["timestamp"],
+                                "description": event["description"],
+                                "timezone": command.get("user_tz", "UTC")}),
+                            "action_id": "reminder"
+                        }
+                    ]
+                })
+
+        respond(blocks=blocks)
+    except FileNotFoundError:
+        respond("❌ Events file not found.")
+    except json.JSONDecodeError:
+        respond("❌ Error reading events file.")
+    except Exception as e:
+        respond(f"❌ Error listing events: `{str(e)}`")
+
 # Start your app
 if __name__ == "__main__":
     app.start(port=int(os.getenv("PORT", 3000)))
