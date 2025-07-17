@@ -84,8 +84,32 @@ def handle_get_time(ack, respond, command):
         # Convert to result timezone
         converted = dt.astimezone(res_timezone)
 
-        respond(f"🕒 Time in `{user_tz_name}`: `{converted.strftime('%Y-%m-%d %H:%M:%S')}`")
-
+        respond(blocks=[
+            
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"🕒 Time in `{user_tz_name}`: `{converted.strftime('%Y-%m-%d %H:%M:%S')}`"
+                }
+            },
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "Remind me",
+                            "emoji": True
+                        },
+                        "value": json.dumps({"timestamp": converted.timestamp(), 
+                                             "timezone": user_tz_name}),
+                        "action_id": "reminder"
+                    }
+                ]
+            }
+        ])
     except pytz.UnknownTimeZoneError:
         respond("❌ Unknown timezone. Please use a valid timezone like `Asia/Singapore`, `US/Pacific`, or `Europe/Berlin`.")
     except Exception as e:
@@ -118,10 +142,36 @@ def handle_get_event(ack, respond, command):
             return
         
         timestamp = datetime.fromtimestamp(event["timestamp"], pytz.timezone(timezone_name))
-        respond(f"📅 Event: \n```{event['description']}```\n"
-                f"🕒 Time: `{timestamp.strftime('%Y-%m-%d %H:%M:%S %Z')}`\n"
-                f"👤 Created by: <@{event['created_by']}>")
-
+        respond(blocks=[
+            
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"📅 Event: \n```{event['description']}```\n"
+                            f"🕒 Time: `{timestamp.strftime('%Y-%m-%d %H:%M:%S %Z')}`\n"
+                            f"👤 Created by: <@{event['created_by']}>"
+                }
+            },
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "Remind me",
+                            "emoji": True
+                        },
+                        "value": json.dumps({
+                            "timestamp": event["timestamp"],
+                            "description": event["description"],
+                            "timezone": timezone_name}),
+                        "action_id": "reminder"
+                    }
+                ]
+            }
+        ])
     except FileNotFoundError:
         respond("❌ Events file not found.")
     except json.JSONDecodeError:
@@ -364,7 +414,32 @@ def handle_reset_time(ack, body, client):
         view_id=view["id"],
         view=updated_view
     )
+@app.action("reminder")
+def handle_reminder(ack, client, action, respond, body):
+    ack()
+    try:
+        # Parse the action value
+        if isinstance(action["value"], str):
+            event_data = json.loads(action["value"])
+        else:
+            event_data = action["value"]
 
+        timestamp = event_data.get("timestamp")
+        if not timestamp:
+            respond("❌ Invalid reminder data.")
+            return
+
+        # Convert timestamp to datetime
+        reminder_time = datetime.fromtimestamp(timestamp, pytz.timezone(event_data.get("timezone", "UTC")))
+        client.chat_scheduleMessage(
+            channel=body["user"]["id"],
+            text=f"🔔 Reminder: {event_data.get('description', f'You set a reminder in <#{body["channel"]["id"]}>')}",
+            post_at=int(reminder_time.timestamp())
+        )
+        # Respond with a confirmation message
+        respond(f"🔔 Reminder set for {reminder_time.strftime('%Y-%m-%d %H:%M:%S')} UTC.")
+    except Exception as e:
+        respond(f"❌ Error setting reminder: `{str(e)}`")
 # Start your app
 if __name__ == "__main__":
     app.start(port=int(os.getenv("PORT", 3000)))
