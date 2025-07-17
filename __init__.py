@@ -23,8 +23,8 @@ def get_user_timezone(user_id):
     )
     if response.status_code == 200:
         user_info = response.json()
-        return user_info.get("user", {}).get("tz", "UTC")
-    return "UTC"
+        return user_info.get("user", {}).get("tz", "America/New_York")  # Default to New York if not set
+    return "America/New_York"
 # get time 
 @app.command("/get_time")
 def handle_get_time(ack, respond, command):
@@ -32,7 +32,14 @@ def handle_get_time(ack, respond, command):
     timezone_args = command.get("text", "").strip().split()
 
     try:
-        org_timezone_name = timezone_args[0] if len(timezone_args) > 0 else "UTC"
+        if len(timezone_args) > 0:
+            if timezone_args[0].startswith("<@"):
+                # Extract the timezone name from the mention
+                org_timezone_name = get_user_timezone(timezone_args[0][2:-1])
+            else:
+                org_timezone_name = timezone_args[0]
+        else:
+            org_timezone_name = "America/New_York"
         org_timezone = pytz.timezone(org_timezone_name)
 
         if len(timezone_args) > 1:
@@ -82,7 +89,11 @@ def handle_get_time(ack, respond, command):
         # Localize in origin timezone
         dt = org_timezone.localize(dt)
         if len(timezone_args) > 3:
-            user_tz_name = timezone_args[3]
+            if timezone_args[3].startswith("<@"):
+                # Extract the timezone name from the mention
+                user_tz_name = get_user_timezone(timezone_args[3][2:-1])
+            else:
+                user_tz_name = timezone_args[3]
         else:
             user_tz_name = get_user_timezone(command["user_id"])
 
@@ -127,7 +138,11 @@ def handle_get_event(ack, respond, command):
     command_args = command.get("text", "").strip().split()
     event_id = command_args[0] if command_args else None
     if len(command_args) > 1:
-        timezone_name = command_args[1]
+        if command_args[1].startswith("<@"):
+            # Extract the timezone name from the mention
+            timezone_name = get_user_timezone(command_args[1][2:-1])
+        else:
+            timezone_name = command_args[1]
     else:
         timezone_name = get_user_timezone(command["user_id"])
     if not event_id:
@@ -208,7 +223,7 @@ def handle_set_event(ack, respond, command, client):
                 "created_by": command["user_id"]
             }
         # Convert event timestamp to user's timezone for display
-        event_datetime_utc = datetime.fromtimestamp(event["timestamp"], pytz.UTC)
+        event_datetime_utc = datetime.fromtimestamp(event["timestamp"])
         event_datetime_user_tz = event_datetime_utc.astimezone(user_timezone)
         
         client.views_open(
@@ -334,7 +349,7 @@ def handle_save_event(ack, body, view):
     description = view["state"]["values"]["description_block"]["description_input"]["value"]
     meta = json.loads(view.get("private_metadata", "{}"))
     original_code = meta.get("original_code", new_code)
-    user_timezone_name = meta.get("user_timezone", "UTC")
+    user_timezone_name = meta.get("user_timezone", "America/New_York")
     errors = {}
 
     try:
@@ -345,7 +360,7 @@ def handle_save_event(ack, body, view):
         user_timezone = pytz.timezone(user_timezone_name)
         naive_datetime = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
         localized_datetime = user_timezone.localize(naive_datetime)
-        timestamp = localized_datetime.astimezone(pytz.UTC).timestamp()
+        timestamp = localized_datetime.timestamp()
 
         # check if new code already exists
         if new_code in events and original_code != new_code:
@@ -387,7 +402,7 @@ def handle_reset_time(ack, body, client):
     # Get user timezone from the modal's private metadata
     view = body["view"]
     meta = json.loads(view.get("private_metadata", "{}"))
-    user_timezone_name = meta.get("user_timezone", "UTC")
+    user_timezone_name = meta.get("user_timezone", "America/New_York")
     user_timezone = pytz.timezone(user_timezone_name)
     
     # Get current time in user's timezone
@@ -428,14 +443,14 @@ def handle_reminder(ack, client, action, respond, body):
             return
 
         # Convert timestamp to datetime
-        reminder_time = datetime.fromtimestamp(timestamp, pytz.timezone(event_data.get("timezone", "UTC")))
+        reminder_time = datetime.fromtimestamp(timestamp, pytz.timezone(event_data.get("timezone", "America/New_York")))
         client.chat_scheduleMessage(
             channel=body["user"]["id"],
             text=f"🔔 Reminder: {event_data.get('description', f'You set a reminder in <#{body["channel"]["id"]}>')}",
             post_at=int(reminder_time.timestamp())
         )
         # Respond with a confirmation message
-        respond(f"🔔 Reminder set for {reminder_time.strftime('%Y-%m-%d %H:%M:%S')} UTC.")
+        respond(f"🔔 Reminder set for {reminder_time.strftime('%Y-%m-%d %H:%M:%S')} America/New_York.")
     except Exception as e:
         respond(f"❌ Error setting reminder: `{str(e)}`")
 
@@ -493,7 +508,7 @@ def handle_list_events(ack, respond, command):
                             "value": json.dumps({
                                 "timestamp": event["timestamp"],
                                 "description": event["description"],
-                                "timezone": command.get("user_tz", "UTC")}),
+                                "timezone": command.get("user_tz", "America/New_York")}),
                             "action_id": "reminder"
                         }
                     ]
